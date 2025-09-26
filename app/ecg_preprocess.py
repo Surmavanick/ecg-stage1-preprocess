@@ -19,6 +19,9 @@ from .utils import (
 OUTPUT_DIR = "/app/output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# ⚠️ აქ ჩაწერე შენი Render-ის რეალური base URL
+BASE_URL = "https://ecg-preprocess.onrender.com"
+
 
 def _bytes_to_bgr(image_bytes: bytes) -> np.ndarray:
     """Decode uploaded bytes into BGR image (OpenCV)."""
@@ -34,7 +37,7 @@ def run_pipeline(image_bytes: bytes, speed_hint: int | None = None, gain_hint: i
       - grid removal
       - trace mask
       - px/mm estimate
-      - save files + return base64 + download_urls
+      - save files + return base64 + full download URLs
     """
     # --- 0) Read/validate ---
     bgr = _bytes_to_bgr(image_bytes)
@@ -94,8 +97,8 @@ def run_pipeline(image_bytes: bytes, speed_hint: int | None = None, gain_hint: i
         "images": {"rectified_png_b64": rectified_b64},
         "masks": {"trace_png_b64": trace_b64, "grid_png_b64": grid_b64},
         "download_urls": {
-            "rectified": "/download/rectified.png",
-            "grid": "/download/grid.png",
-            "trace": "/download/trace.png",
+            "rectified": f"{BASE_URL}/download/rectified.png",
+            "grid": f"{BASE_URL}/download/grid.png",
+            "trace": f"{BASE_URL}/download/trace.png",
         },
     }
