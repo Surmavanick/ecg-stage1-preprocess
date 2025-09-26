@@ -1,17 +1,28 @@
-# Minimal Dockerfile for Stage 1
+# მსუბუქი Python base image
 FROM python:3.11-slim
 
-# System deps (opencv needs)
+# Env config
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# System dependencies (OpenCV და სხვა libs)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 libgl1 libsm6 libxrender1 libxext6 \
     && rm -rf /var/lib/apt/lists/*
 
+# სამუშაო დირექტორია
 WORKDIR /app
-COPY requirements.txt /app/
+
+# requirements.txt ქეშისთვის
+COPY requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app /app/app
+# app კოდი
+COPY app ./app
+
+# output დირექტორია
 RUN mkdir -p /app/output
 
-EXPOSE 8000
+# uvicorn start
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
