@@ -35,10 +35,17 @@ async def preprocess_ecg_photo(
         # 🧠 ECG preprocessing pipeline
         result = ecg_preprocess.run_pipeline(file_bytes)
 
+        # 🛠 Download URL-ების აგება
+        download_urls = {
+            "rectified": f"/download/{result['rectified_file']}",
+            "trace": f"/download/{result['trace_file']}",
+            "grid": f"/download/{result['grid_file']}"
+        }
+
         response_data = {
             "ok": True,
             "debug": result.get("debug", {}),
-            "download_urls": result.get("download_urls", {})
+            "download_urls": download_urls
         }
 
         # 🚀 შედეგის გადაგზავნა n8n-ში
