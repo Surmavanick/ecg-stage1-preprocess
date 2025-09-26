@@ -1,5 +1,7 @@
+# app/main.py
+import os
 from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 import httpx
 
 # ECG preprocessing მოდული
@@ -9,6 +11,10 @@ app = FastAPI()
 
 # შენი n8n webhook URL
 WEBHOOK_URL = "https://foodmart.app.n8n.cloud/webhook/ecg-ready"
+
+# ფაილების საქაღალდე
+OUTPUT_DIR = "/app/output"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 @app.get("/health")
@@ -33,19 +39,18 @@ async def preprocess_ecg_photo(
         file_bytes = await image.read()
 
         # 🧠 ECG preprocessing pipeline
-        result = ecg_preprocess.run_pipeline(file_bytes)
-
-        # 🛠 Download URL-ების აგება
-        download_urls = {
-            "rectified": f"/download/{result['rectified_file']}",
-            "trace": f"/download/{result['trace_file']}",
-            "grid": f"/download/{result['grid_file']}"
-        }
+        result = ecg_preprocess.run_pipeline(
+            file_bytes,
+            speed_hint=speed_hint,
+            gain_hint=gain_hint
+        )
 
         response_data = {
             "ok": True,
             "debug": result.get("debug", {}),
-            "download_urls": download_urls
+            "images": result.get("images", {}),
+            "masks": result.get("masks", {}),
+            "download_urls": result.get("download_urls", {})
         }
 
         # 🚀 შედეგის გადაგზავნა n8n-ში
@@ -63,3 +68,17 @@ async def preprocess_ecg_photo(
             content={"ok": False, "error": str(e)},
             status_code=500
         )
+
+
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    """
+    ამოიღებს ფაილს /app/output დირექტორიიდან და აბრუნებს როგორც download.
+    """
+    file_path = os.path.join(OUTPUT_DIR, filename)
+    if not os.path.exists(file_path):
+        return JSONResponse(
+            content={"ok": False, "error": "File not found"},
+            status_code=404
+        )
+    return FileResponse(file_path, filename=filename)
