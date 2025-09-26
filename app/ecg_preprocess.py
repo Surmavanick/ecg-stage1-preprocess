@@ -1,4 +1,3 @@
-# app/ecg_preprocess.py
 import os
 import base64
 from typing import Dict, Any
@@ -31,12 +30,11 @@ def _bytes_to_bgr(image_bytes: bytes) -> np.ndarray:
 def run_pipeline(image_bytes: bytes, speed_hint: int | None = None, gain_hint: int | None = None) -> Dict[str, Any]:
     """
     Stage 1 pipeline:
-      - deskew/dewarp (rotation only here)
-      - grid removal (inpaint red grid)
-      - trace mask (binary)
+      - deskew/dewarp
+      - grid removal
+      - trace mask
       - px/mm estimate
-      - debug images + base64 outputs
-      - files saved for download
+      - save files + return base64 + download_urls
     """
     # --- 0) Read/validate ---
     bgr = _bytes_to_bgr(image_bytes)
@@ -49,7 +47,7 @@ def run_pipeline(image_bytes: bytes, speed_hint: int | None = None, gain_hint: i
             "download_urls": {},
         }
 
-    # --- 1) Deskew (rotation by Hough) ---
+    # --- 1) Deskew ---
     gray0 = cv.cvtColor(bgr, cv.COLOR_BGR2GRAY)
     angle = detect_skew_angle_via_hough(gray0)
     rotated = rotate_image(bgr, angle)
@@ -59,10 +57,10 @@ def run_pipeline(image_bytes: bytes, speed_hint: int | None = None, gain_hint: i
     rotated_gray = cv.cvtColor(rotated, cv.COLOR_BGR2GRAY)
     no_grid = inpaint_grid(rotated_gray, grid_mask)
 
-    # --- 3) Trace mask (binary) ---
+    # --- 3) Trace mask ---
     trace_mask = trace_mask_from_gray(no_grid)
 
-    # --- 4) Grid period → px/mm estimate ---
+    # --- 4) px/mm estimate ---
     period_x, period_y = estimate_grid_period(grid_mask)
     valid_periods = [p for p in (period_x, period_y) if p and p > 0]
     px_per_mm = float(np.mean(valid_periods) if valid_periods else 20.0)
@@ -70,7 +68,7 @@ def run_pipeline(image_bytes: bytes, speed_hint: int | None = None, gain_hint: i
     # --- 5) QC metrics ---
     blur_var = variance_of_laplacian(rotated_gray)
 
-    # --- 6) Write debug images to disk ---
+    # --- 6) Save files ---
     rectified_file = os.path.join(OUTPUT_DIR, "rectified.png")
     grid_file = os.path.join(OUTPUT_DIR, "grid.png")
     trace_file = os.path.join(OUTPUT_DIR, "trace.png")
@@ -81,7 +79,7 @@ def run_pipeline(image_bytes: bytes, speed_hint: int | None = None, gain_hint: i
     except Exception:
         pass
 
-    # --- 7) Encode to base64 for API ---
+    # --- 7) Encode base64 ---
     rectified_b64 = base64.b64encode(to_png_bytes(rotated)).decode("utf-8")
     grid_b64 = base64.b64encode(to_png_bytes(grid_mask)).decode("utf-8")
     trace_b64 = base64.b64encode(to_png_bytes(trace_mask)).decode("utf-8")
