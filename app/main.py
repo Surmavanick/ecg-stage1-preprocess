@@ -1,19 +1,22 @@
+import os
 from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 import httpx
 
-# ECG preprocessing მოდული
 from app import ecg_preprocess
 
 app = FastAPI()
 
-# შენი n8n webhook URL (production)
+# n8n webhook URL
 WEBHOOK_URL = "https://foodmart.app.n8n.cloud/webhook/ecg-ready"
+
+# Output დირექტორია
+OUTPUT_DIR = "/app/output"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 @app.get("/health")
 async def health():
-    """Health-check endpoint."""
     return {"status": "ok"}
 
 
@@ -26,7 +29,7 @@ async def preprocess_ecg_photo(
 ):
     """
     იღებს ECG ფოტოს, ამუშავებს და აბრუნებს JSON-ს.
-    პარალელურად იგზავნება შედეგი n8n webhook-ზე.
+    პარალელურად აგზავნის შედეგს n8n webhook-ზე.
     """
     try:
         # 📥 ფაილის წამოღება
@@ -38,10 +41,12 @@ async def preprocess_ecg_photo(
         response_data = {
             "ok": True,
             "debug": result.get("debug", {}),
+            "images": result.get("images", {}),
+            "masks": result.get("masks", {}),
             "download_urls": result.get("download_urls", {})
         }
 
-        # 🚀 შედეგის გადაგზავნა n8n-ში
+        # 🚀 გაგზავნა n8n-ში
         async with httpx.AsyncClient() as client:
             try:
                 print(f"📡 ვაგზავნი n8n-ზე: {WEBHOOK_URL}")
@@ -55,7 +60,15 @@ async def preprocess_ecg_photo(
 
     except Exception as e:
         print(f"❌ შეცდომა /ecg-photo/preprocess endpoint-ზე: {e}")
-        return JSONResponse(
-            content={"ok": False, "error": str(e)},
-            status_code=500
-        )
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    """
+    აბრუნებს ფაილს /app/output დირექტორიიდან როგორც download.
+    """
+    file_path = os.path.join(OUTPUT_DIR, filename)
+    if not os.path.exists(file_path):
+        return JSONResponse(content={"ok": False, "error": "File not found"}, status_code=404)
+    return FileResponse(file_path, filename=filename)
