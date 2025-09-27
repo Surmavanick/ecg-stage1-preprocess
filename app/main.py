@@ -1,3 +1,5 @@
+# main.py
+
 import os
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse, FileResponse
@@ -7,10 +9,7 @@ from app import ecg_preprocess
 
 app = FastAPI()
 
-# n8n webhook URL
-WEBHOOK_URL = "https://foodmart.app.n8n.cloud/webhook/ecg-ready"
-
-# Output დირექტორია
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-webhook-url.n8n.cloud/webhook/ecg-ready")
 OUTPUT_DIR = "/app/output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -20,23 +19,25 @@ async def health():
     return {"status": "ok"}
 
 
+# --- CHANGES HERE ---
 @app.post("/ecg-photo/preprocess")
 async def preprocess_ecg_photo(
     image: UploadFile = File(...),
+    grid_color: str = Form("red"),  # New form field for grid color
     layout_hint: str = Form("string"),
     speed_hint: int = Form(0),
     gain_hint: int = Form(0)
 ):
     """
-    იღებს ECG ფოტოს, ამუშავებს და აბრუნებს JSON-ს.
-    პარალელურად აგზავნის შედეგს n8n webhook-ზე.
+    Receives an ECG photo, processes it, and returns a JSON.
+    The grid color can now be specified ('red', 'blue', 'green').
     """
     try:
-        # 📥 ფაილის წამოღება
         file_bytes = await image.read()
 
-        # 🧠 ECG preprocessing pipeline
-        result = ecg_preprocess.run_pipeline(file_bytes)
+        # --- AND HERE ---
+        # Pass the grid_color from the form to the pipeline
+        result = ecg_preprocess.run_pipeline(file_bytes, grid_color=grid_color)
 
         response_data = {
             "ok": True,
@@ -46,28 +47,24 @@ async def preprocess_ecg_photo(
             "download_urls": result.get("download_urls", {})
         }
 
-        # 🚀 გაგზავნა n8n-ში
-        async with httpx.AsyncClient() as client:
-            try:
-                print(f"📡 ვაგზავნი n8n-ზე: {WEBHOOK_URL}")
-                resp = await client.post(WEBHOOK_URL, json=response_data, timeout=30)
-                print(f"✅ n8n პასუხი: {resp.status_code} - {resp.text}")
-            except Exception as webhook_error:
-                print(f"⚠️ ვერ გავაგზავნე n8n-ზე: {webhook_error}")
+        if WEBHOOK_URL:
+             async with httpx.AsyncClient() as client:
+                try:
+                    print(f"📡 Sending to n8n webhook: {WEBHOOK_URL}")
+                    resp = await client.post(WEBHOOK_URL, json=response_data, timeout=30)
+                    print(f"✅ n8n response: {resp.status_code}")
+                except Exception as webhook_error:
+                    print(f"⚠️ Failed to send to n8n webhook: {webhook_error}")
 
-        # 📤 პასუხი API-ს მომხმარებელს
         return JSONResponse(content=response_data)
 
     except Exception as e:
-        print(f"❌ შეცდომა /ecg-photo/preprocess endpoint-ზე: {e}")
+        print(f"❌ Error in /ecg-photo/preprocess endpoint: {e}")
         return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
 
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
-    """
-    აბრუნებს ფაილს /app/output დირექტორიიდან როგორც download.
-    """
     file_path = os.path.join(OUTPUT_DIR, filename)
     if not os.path.exists(file_path):
         return JSONResponse(content={"ok": False, "error": "File not found"}, status_code=404)
