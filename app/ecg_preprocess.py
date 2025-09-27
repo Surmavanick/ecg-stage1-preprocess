@@ -11,7 +11,8 @@ from .utils import (
     variance_of_laplacian,
     rotate_image,
     detect_skew_angle_via_hough,
-    grid_mask_from_gray_lines,
+    grid_mask_from_hsv,
+    refine_grid_mask_morphologically, # !!! ახალი ფუნქციის იმპორტი
     inpaint_grid,
     estimate_grid_period,
     to_png_bytes,
@@ -20,59 +21,41 @@ from .utils import (
 
 OUTPUT_DIR = "/app/output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
 BASE_URL = os.getenv("BASE_URL", "https://your-app-name.onrender.com")
-
 
 def _bytes_to_bgr(image_bytes: bytes) -> np.ndarray:
     arr = np.frombuffer(image_bytes, np.uint8)
-    bgr = cv.imdecode(arr, cv.IMREAD_COLOR)
-    return bgr
+    return cv.imdecode(arr, cv.IMREAD_COLOR)
 
-
-def run_pipeline(image_bytes: bytes, **kwargs) -> Dict[str, Any]:
+def run_pipeline(image_bytes: bytes, grid_color: str = 'red', **kwargs) -> Dict[str, Any]:
     bgr = _bytes_to_bgr(image_bytes)
     if bgr is None:
-        # Return empty response if image loading fails
         empty_png = base64.b64encode(to_png_bytes(np.zeros((32, 32), np.uint8))).decode("utf-8")
         return {"debug": {}, "images": {"rectified_png_b64": empty_png}, "masks": {}, "download_urls": {}}
 
-    # --- Step 1: Deskew ---
+    # --- SIMPLIFIED HYBRID LOGIC ---
+
+    # 1. Deskew
     gray0 = cv.cvtColor(bgr, cv.COLOR_BGR2GRAY)
     angle = detect_skew_angle_via_hough(gray0)
     rotated_bgr = rotate_image(bgr, angle)
 
-    # --- Step 2: Create a high-contrast image for grid detection ---
-    # THE MAIN FIX: We split the BGR image into 3 channels (Blue, Green, Red)
-    # The blue channel makes the blue/dark trace almost white and the red grid very dark.
-    # This creates a perfect high-contrast image for our grid detection logic.
-    blue_channel, _, _ = cv.split(rotated_bgr)
-    
-    # We invert the blue channel so the grid lines become white (foreground) for the mask functions.
-    high_contrast_gray = cv.bitwise_not(blue_channel)
+    # 2. Get the "dirty" grid mask using color
+    dirty_grid_mask = grid_mask_from_hsv(rotated_bgr, color=grid_color)
 
+    # 3. Clean the mask using morphology to keep only straight lines
+    grid_mask = refine_grid_mask_morphologically(dirty_grid_mask)
 
-    # --- Step 3: Find the Grid using the morphological function on the high-contrast image ---
-    # Now, grid_mask_from_gray_lines will work reliably.
-    grid_mask = grid_mask_from_gray_lines(high_contrast_gray)
-
-
-    # --- Step 4: Find the initial trace mask from the original grayscale image ---
-    rotated_gray = cv.cvtColor(rotated_bgr, cv.COLOR_BGR2GRAY)
-    trace_mask_initial = trace_mask_from_gray(rotated_gray)
-    
-    # Refine grid mask by removing any parts of the trace
-    grid_mask = cv.subtract(grid_mask, trace_mask_initial)
-
-
-    # --- Step 5: Inpaint the ORIGINAL COLOR image ---
+    # 4. Inpaint the COLOR image with the clean grid mask
     rectified_color = inpaint_grid(rotated_bgr, grid_mask)
 
-    # --- Step 6: Find the final, clean trace mask from the rectified image ---
+    # 5. Find the final trace mask from the now clean image
     rectified_gray = cv.cvtColor(rectified_color, cv.COLOR_BGR2GRAY)
-    trace_mask_final = trace_mask_from_gray(rectified_gray)
+    trace_mask = trace_mask_from_gray(rectified_gray)
+    
+    # --- END OF LOGIC ---
 
-    # --- QC & Save ---
+    # QC & Save
     period_x, period_y = estimate_grid_period(grid_mask)
     blur_var = variance_of_laplacian(gray0)
     coverage = cv.countNonZero(grid_mask) / (grid_mask.size + 1e-9)
@@ -83,19 +66,18 @@ def run_pipeline(image_bytes: bytes, **kwargs) -> Dict[str, Any]:
     try:
         cv.imwrite(rectified_file, rectified_color)
         cv.imwrite(grid_file, grid_mask)
-        cv.imwrite(trace_file, trace_mask_final)
+        cv.imwrite(trace_file, trace_mask)
     except Exception as e:
         print(f"Error saving files: {e}")
 
-    # --- Encode & Return ---
+    # Encode & Return
     rectified_b64 = base64.b64encode(to_png_bytes(rectified_color)).decode("utf-8")
     grid_b64 = base64.b64encode(to_png_bytes(grid_mask)).decode("utf-8")
-    trace_b64 = base64.b64encode(to_png_bytes(trace_mask_final)).decode("utf-8")
+    trace_b64 = base64.b64encode(to_png_bytes(trace_mask)).decode("utf-8")
 
     return {
         "debug": {
             "rotation_deg": float(angle),
-            "px_per_mm": float(np.mean([p for p in (period_x, period_y) if p and p > 0]) if any(p and p > 0 for p in (period_x, period_y)) else 20.0),
             "grid_period_px": {"x": float(period_x), "y": float(period_y)},
             "blur_var": float(blur_var),
             "grid_coverage_pct": float(coverage),
