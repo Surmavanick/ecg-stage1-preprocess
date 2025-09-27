@@ -9,7 +9,7 @@ from .utils import (
     variance_of_laplacian,
     rotate_image,
     detect_skew_angle_via_hough,
-    grid_mask_from_gray_lines,   # <- ახალი, ფერზე არამოკიდებული grid
+    grid_mask_from_gray_lines,   # მხოლოდ morphology grid
     inpaint_grid,
     estimate_grid_period,
     to_png_bytes,
@@ -31,47 +31,51 @@ def _bytes_to_bgr(image_bytes: bytes) -> np.ndarray:
 def run_pipeline(image_bytes: bytes, **kwargs) -> Dict[str, Any]:
     bgr = _bytes_to_bgr(image_bytes)
     if bgr is None:
-        empty_png = base64.b64encode(to_png_bytes(np.zeros((32, 32, 3), np.uint8))).decode("utf-8")
+        empty_png = base64.b64encode(
+            to_png_bytes(np.zeros((32, 32, 3), np.uint8))
+        ).decode("utf-8")
         return {
-            "debug": {"rotation_deg": 0.0, "px_per_mm": 0.0, "grid_period_px": {"x": 0.0, "y": 0.0},
+            "debug": {"rotation_deg": 0.0, "px_per_mm": 0.0,
+                      "grid_period_px": {"x": 0.0, "y": 0.0},
                       "blur_var": 0.0, "grid_coverage_pct": 0.0},
             "images": {"rectified_png_b64": empty_png},
             "masks": {"trace_png_b64": empty_png, "grid_png_b64": empty_png},
             "download_urls": {},
         }
 
-    # 1) Deskew (COLOR ინარჩუნებს)
+    # --- Step 1: Deskew (COLOR ინარჩუნებს) ---
     gray0 = cv.cvtColor(bgr, cv.COLOR_BGR2GRAY)
     angle = detect_skew_angle_via_hough(gray0)
     rotated_bgr  = rotate_image(bgr, angle)
     rotated_gray = cv.cvtColor(rotated_bgr, cv.COLOR_BGR2GRAY)
 
-    # 2) TRACE – ჯერ გამოვიყვანოთ (როცა grid მოგვიანებით ამოვაკლებთ)
+    # --- Step 2: Trace (საწყისი) ---
     trace_mask_initial = trace_mask_from_gray(rotated_gray)
 
-    # 3) GRID – ფერზე არამოკიდებული მორფოლოგიური ამოცნობა
+    # --- Step 3: GRID (მხოლოდ morphology) ---
     grid_mask = grid_mask_from_gray_lines(rotated_gray)
 
-    # 3a) GRID-დან ამოვაკლოთ TRACE (რომ ECG ხაზი grid-ში არ მოხვდეს)
+    # trace გამოვაკლოთ grid-ს
     grid_mask = cv.subtract(grid_mask, trace_mask_initial)
-    grid_mask = cv.morphologyEx(grid_mask, cv.MORPH_OPEN, np.ones((3,3), np.uint8), iterations=1)
+    grid_mask = cv.morphologyEx(grid_mask, cv.MORPH_OPEN,
+                                np.ones((3,3), np.uint8), iterations=1)
 
     coverage = cv.countNonZero(grid_mask) / (grid_mask.size + 1e-9)
 
-    # 4) INPAINT – GRID-ის მოშორება ფერად გამოსახულებაზე
+    # --- Step 4: Inpaint (ფერად rotated_bgr-ზე) ---
     rectified_color = inpaint_grid(rotated_bgr, grid_mask)
 
-    # 5) TRACE – სურვილისამებრ ხელახლა (უკვე grid-ის გარეშე, სუფთად)
+    # --- Step 5: Trace ხელახლა (უკვე grid-ის გარეშე) ---
     rectified_gray = cv.cvtColor(rectified_color, cv.COLOR_BGR2GRAY)
     trace_mask = trace_mask_from_gray(rectified_gray)
 
-    # 6) QC
+    # --- Step 6: QC ---
     period_x, period_y = estimate_grid_period(grid_mask)
     valid_periods = [p for p in (period_x, period_y) if p and p > 0]
     px_per_mm = float(np.mean(valid_periods) if valid_periods else 20.0)
     blur_var = variance_of_laplacian(rotated_gray)
 
-    # 7) Save
+    # --- Step 7: Save ---
     rectified_file = os.path.join(OUTPUT_DIR, "rectified.png")
     grid_file = os.path.join(OUTPUT_DIR, "grid.png")
     trace_file = os.path.join(OUTPUT_DIR, "trace.png")
@@ -82,7 +86,7 @@ def run_pipeline(image_bytes: bytes, **kwargs) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 8) Encode
+    # --- Step 8: Encode ---
     rectified_b64 = base64.b64encode(to_png_bytes(rectified_color)).decode("utf-8")
     grid_b64 = base64.b64encode(to_png_bytes(grid_mask)).decode("utf-8")
     trace_b64 = base64.b64encode(to_png_bytes(trace_mask)).decode("utf-8")
