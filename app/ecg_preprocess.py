@@ -1,3 +1,5 @@
+# ecg_preprocess.py
+
 import os
 import base64
 from typing import Dict, Any
@@ -5,11 +7,12 @@ from typing import Dict, Any
 import cv2 as cv
 import numpy as np
 
+# --- CHANGES HERE ---
 from .utils import (
     variance_of_laplacian,
     rotate_image,
     detect_skew_angle_via_hough,
-    grid_mask_from_red_hsv,
+    grid_mask_from_hsv,  # Changed from grid_mask_from_red_hsv
     inpaint_grid,
     estimate_grid_period,
     trace_mask_from_gray,
@@ -19,25 +22,19 @@ from .utils import (
 OUTPUT_DIR = "/app/output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ⚠️ აქ ჩაწერე შენი Render-ის რეალური base URL
-BASE_URL = "https://ecg-preprocess.onrender.com"
+BASE_URL = os.getenv("BASE_URL", "https://your-app-name.onrender.com")
 
 
 def _bytes_to_bgr(image_bytes: bytes) -> np.ndarray:
-    """Decode uploaded bytes into BGR image (OpenCV)."""
     arr = np.frombuffer(image_bytes, np.uint8)
     bgr = cv.imdecode(arr, cv.IMREAD_COLOR)
     return bgr
 
 
-def run_pipeline(image_bytes: bytes, speed_hint: int | None = None, gain_hint: int | None = None) -> Dict[str, Any]:
+# --- AND HERE ---
+def run_pipeline(image_bytes: bytes, grid_color: str = "red") -> Dict[str, Any]:
     """
-    Stage 1 pipeline:
-      - deskew/dewarp
-      - grid removal
-      - trace mask
-      - px/mm estimate
-      - save files + return base64 + full download URLs
+    Stage 1 pipeline. Now accepts a grid_color parameter.
     """
     # --- 0) Read/validate ---
     bgr = _bytes_to_bgr(image_bytes)
@@ -56,22 +53,21 @@ def run_pipeline(image_bytes: bytes, speed_hint: int | None = None, gain_hint: i
     rotated = rotate_image(bgr, angle)
 
     # --- 2) Grid mask + removal ---
-    grid_mask = grid_mask_from_red_hsv(rotated)
-    rotated_gray = cv.cvtColor(rotated, cv.COLOR_BGR2GRAY)
+    # --- AND HERE ---
+    # Pass the grid_color parameter to the updated function
+    grid_mask = grid_mask_from_hsv(rotated, color=grid_color)
+    rotated_gray = cv.cvtColor(rotated, cv.COLOR_BGR_GRAY)
     no_grid = inpaint_grid(rotated_gray, grid_mask)
 
     # --- 3) Trace mask ---
     trace_mask = trace_mask_from_gray(no_grid)
 
-    # --- 4) px/mm estimate ---
+    # ... rest of the function remains the same ...
     period_x, period_y = estimate_grid_period(grid_mask)
     valid_periods = [p for p in (period_x, period_y) if p and p > 0]
     px_per_mm = float(np.mean(valid_periods) if valid_periods else 20.0)
-
-    # --- 5) QC metrics ---
     blur_var = variance_of_laplacian(rotated_gray)
 
-    # --- 6) Save files ---
     rectified_file = os.path.join(OUTPUT_DIR, "rectified.png")
     grid_file = os.path.join(OUTPUT_DIR, "grid.png")
     trace_file = os.path.join(OUTPUT_DIR, "trace.png")
@@ -82,7 +78,6 @@ def run_pipeline(image_bytes: bytes, speed_hint: int | None = None, gain_hint: i
     except Exception:
         pass
 
-    # --- 7) Encode base64 ---
     rectified_b64 = base64.b64encode(to_png_bytes(rotated)).decode("utf-8")
     grid_b64 = base64.b64encode(to_png_bytes(grid_mask)).decode("utf-8")
     trace_b64 = base64.b64encode(to_png_bytes(trace_mask)).decode("utf-8")
