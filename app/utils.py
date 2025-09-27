@@ -2,7 +2,6 @@ import cv2 as cv
 import numpy as np
 from typing import Tuple
 
-# --- No changes in these functions ---
 def variance_of_laplacian(gray: np.ndarray) -> float:
     return float(cv.Laplacian(gray, cv.CV_64F).var())
 
@@ -29,15 +28,12 @@ def detect_skew_angle_via_hough(gray: np.ndarray) -> float:
     median = float(np.median(angles))
     return -median
 
-# --- CHANGES START HERE ---
-
 def grid_mask_from_hsv(bgr: np.ndarray, color: str = "red") -> np.ndarray:
     """
     Creates a grid mask based on the specified color ('red', 'blue', 'green').
     """
     hsv = cv.cvtColor(bgr, cv.COLOR_BGR2HSV)
     
-    # Color ranges dictionary to make the function flexible
     color_ranges = {
         'red': {
             'lower1': (0, 70, 70), 'upper1': (10, 255, 255),
@@ -45,20 +41,16 @@ def grid_mask_from_hsv(bgr: np.ndarray, color: str = "red") -> np.ndarray:
         },
         'blue': {
             'lower1': (100, 150, 0), 'upper1': (140, 255, 255),
-            'lower2': None, 'upper2': None # Blue has one continuous range
+            'lower2': None, 'upper2': None
         },
         'green': {
             'lower1': (36, 50, 70), 'upper1': (89, 255, 255),
-            'lower2': None, 'upper2': None # Green also has one range
+            'lower2': None, 'upper2': None
         }
     }
 
-    selected_color = color_ranges.get(color.lower())
-    if not selected_color:
-        # Default to red if an invalid color is provided
-        selected_color = color_ranges['red']
+    selected_color = color_ranges.get(color.lower(), color_ranges['red'])
 
-    # Create mask based on the selected color ranges
     mask1 = cv.inRange(hsv, selected_color['lower1'], selected_color['upper1'])
     if selected_color['lower2'] is not None:
         mask2 = cv.inRange(hsv, selected_color['lower2'], selected_color['upper2'])
@@ -70,13 +62,12 @@ def grid_mask_from_hsv(bgr: np.ndarray, color: str = "red") -> np.ndarray:
     mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel, iterations=1)
     return mask
 
-# --- CHANGES END HERE ---
-
-
-# --- No changes in the remaining functions ---
-def inpaint_grid(gray: np.ndarray, grid_mask: np.ndarray) -> np.ndarray:
+def inpaint_grid(image: np.ndarray, grid_mask: np.ndarray) -> np.ndarray:
+    """
+    Removes the grid from an image (color or grayscale) using inpainting.
+    """
     mask = (grid_mask > 0).astype(np.uint8) * 255
-    return cv.inpaint(gray, mask, 3, cv.INPAINT_TELEA)
+    return cv.inpaint(image, mask, 3, cv.INPAINT_TELEA)
 
 def estimate_grid_period(mask: np.ndarray) -> Tuple[float, float]:
     if mask.ndim == 3:
