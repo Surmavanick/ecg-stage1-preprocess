@@ -14,8 +14,7 @@ from .utils import (
     grid_mask_from_hsv,
     inpaint_grid,
     estimate_grid_period,
-    trace_mask_from_gray,
-    to_png_bytes,
+    to_png_bytes,  # Removed trace_mask_from_gray as we use a better method now
 )
 
 OUTPUT_DIR = "/app/output"
@@ -41,38 +40,57 @@ def run_pipeline(image_bytes: bytes, grid_color: str = "red") -> Dict[str, Any]:
             "download_urls": {},
         }
 
+    # --- NEW, MORE ROBUST LOGIC ---
+
+    # 1. Deskew the image first
     gray0 = cv.cvtColor(bgr, cv.COLOR_BGR2GRAY)
     angle = detect_skew_angle_via_hough(gray0)
-    rotated = rotate_image(bgr, angle)
+    rotated_bgr = rotate_image(bgr, angle)
+    rotated_gray = cv.cvtColor(rotated_bgr, cv.COLOR_BGR2GRAY)
 
-    grid_mask = grid_mask_from_hsv(rotated, color=grid_color)
+    # 2. Isolate the dark trace reliably using Otsu's thresholding
+    # This gives us a clean mask of the trace itself.
+    _, trace_mask = cv.threshold(rotated_gray, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU)
     
-    # --- THE FIX IS ON THIS LINE ---
-    # Changed cv.COLOR_BGR_GRAY to the correct cv.COLOR_BGR2GRAY
-    rotated_gray = cv.cvtColor(rotated, cv.COLOR_BGR2GRAY)
-    # --- END OF FIX ---
-    
-    no_grid = inpaint_grid(rotated_gray, grid_mask)
+    # 3. Get the initial grid mask using the color method (as before)
+    initial_grid_mask = grid_mask_from_hsv(rotated_bgr, color=grid_color)
 
-    trace_mask = trace_mask_from_gray(no_grid)
+    # 4. Refine the grid mask by REMOVING the trace from it
+    # This solves the problem of the trace being detected as part of the grid.
+    refined_grid_mask = cv.subtract(initial_grid_mask, trace_mask)
+    # Optional: clean up small noise from the refined mask
+    kernel = np.ones((2,2), np.uint8)
+    refined_grid_mask = cv.morphologyEx(refined_grid_mask, cv.MORPH_OPEN, kernel)
 
-    period_x, period_y = estimate_grid_period(grid_mask)
+    # 5. Inpaint the grayscale image using the REFINED grid mask
+    no_grid_image = inpaint_grid(rotated_gray, refined_grid_mask)
+
+    # The final `trace_mask` is the one we generated in step 2, which is already clean.
+    # The final `grid_mask` is the `refined_grid_mask` from step 4.
+
+    # --- END OF NEW LOGIC ---
+
+    # QC metrics
+    period_x, period_y = estimate_grid_period(refined_grid_mask)
     valid_periods = [p for p in (period_x, period_y) if p and p > 0]
     px_per_mm = float(np.mean(valid_periods) if valid_periods else 20.0)
     blur_var = variance_of_laplacian(rotated_gray)
 
+    # Save files
     rectified_file = os.path.join(OUTPUT_DIR, "rectified.png")
     grid_file = os.path.join(OUTPUT_DIR, "grid.png")
     trace_file = os.path.join(OUTPUT_DIR, "trace.png")
     try:
-        cv.imwrite(rectified_file, rotated)
-        cv.imwrite(grid_file, grid_mask)
+        # Save the inpainted image, which should now look much better
+        cv.imwrite(rectified_file, no_grid_image) 
+        cv.imwrite(grid_file, refined_grid_mask)
         cv.imwrite(trace_file, trace_mask)
     except Exception:
         pass
 
-    rectified_b64 = base64.b64encode(to_png_bytes(rotated)).decode("utf-8")
-    grid_b64 = base64.b64encode(to_png_bytes(grid_mask)).decode("utf-8")
+    # Encode base64
+    rectified_b64 = base64.b64encode(to_png_bytes(no_grid_image)).decode("utf-8")
+    grid_b64 = base64.b64encode(to_png_bytes(refined_grid_mask)).decode("utf-8")
     trace_b64 = base64.b64encode(to_png_bytes(trace_mask)).decode("utf-8")
 
     return {
