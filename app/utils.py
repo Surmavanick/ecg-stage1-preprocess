@@ -2,6 +2,7 @@ import cv2 as cv
 import numpy as np
 from typing import Tuple
 
+# --- საბაზისო უტილები ---
 def variance_of_laplacian(gray: np.ndarray) -> float:
     return float(cv.Laplacian(gray, cv.CV_64F).var())
 
@@ -28,51 +29,61 @@ def detect_skew_angle_via_hough(gray: np.ndarray) -> float:
     median = float(np.median(angles))
     return -median
 
-def grid_mask_from_hsv(bgr: np.ndarray, color: str = "red") -> np.ndarray:
+
+# --- ფერზე არამოკიდებული GRID ამოცნობა (მორფოლოგიური) ---
+def grid_mask_from_gray_lines(gray: np.ndarray) -> np.ndarray:
     """
-    Creates a grid mask based on the specified color ('red', 'blue', 'green').
+    ECG-ის ბადის ამოცნობა მხოლოდ სტრუქტურაზე დაყრდნობით.
+    იდეა: გავანათოთ ხაზები (black-hat), შემდეგ გამოყოთ გრძელი ჰორიზონტალური/ვერტიკალური სტრუქტურები.
     """
-    hsv = cv.cvtColor(bgr, cv.COLOR_BGR2HSV)
-    
-    color_ranges = {
-        'red': {
-            'lower1': (0, 70, 70), 'upper1': (10, 255, 255),
-            'lower2': (170, 70, 70), 'upper2': (180, 255, 255)
-        },
-        'blue': {
-            'lower1': (100, 150, 0), 'upper1': (140, 255, 255),
-            'lower2': None, 'upper2': None
-        },
-        'green': {
-            'lower1': (36, 50, 70), 'upper1': (89, 255, 255),
-            'lower2': None, 'upper2': None
-        }
-    }
+    gray = cv.medianBlur(gray, 3)
 
-    selected_color = color_ranges.get(color.lower(), color_ranges['red'])
+    # პატარა კონტრლიეტურა (CLAHE) სხვადასხვა განათებაზე სიჯანსაღისთვის
+    clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    g = clahe.apply(gray)
 
-    mask1 = cv.inRange(hsv, selected_color['lower1'], selected_color['upper1'])
-    if selected_color['lower2'] is not None:
-        mask2 = cv.inRange(hsv, selected_color['lower2'], selected_color['upper2'])
-        mask = cv.bitwise_or(mask1, mask2)
-    else:
-        mask = mask1
-        
-    kernel = np.ones((3,3), np.uint8)
-    mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel, iterations=1)
-    return mask
+    # ხაზების გაშავება: black-hat (მუქი ხაზები ნათელ ფონზე)
+    bh_h = cv.morphologyEx(g, cv.MORPH_BLACKHAT, cv.getStructuringElement(cv.MORPH_RECT, (41, 1)))
+    bh_v = cv.morphologyEx(g, cv.MORPH_BLACKHAT, cv.getStructuringElement(cv.MORPH_RECT, (1, 41)))
+    bh = cv.addWeighted(bh_h, 0.5, bh_v, 0.5, 0)
 
+    # ბინარიზაცია Otsu-თი
+    _, th = cv.threshold(bh, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
+
+    h, w = th.shape[:2]
+
+    # მსხვილი (დიდი კვადრატების) ჰორიზონტალური/ვერტიკული ხაზები
+    k_h_major = cv.getStructuringElement(cv.MORPH_RECT, (max(25, w // 45), 1))
+    k_v_major = cv.getStructuringElement(cv.MORPH_RECT, (1, max(25, h // 45)))
+    horiz_major = cv.morphologyEx(th, cv.MORPH_OPEN, k_h_major)
+    vert_major  = cv.morphologyEx(th, cv.MORPH_OPEN, k_v_major)
+
+    # წვრილი (პატარა კვადრატების) ხაზები
+    k_h_minor = cv.getStructuringElement(cv.MORPH_RECT, (max(9, w // 140), 1))
+    k_v_minor = cv.getStructuringElement(cv.MORPH_RECT, (1, max(9, h // 140)))
+    horiz_minor = cv.morphologyEx(th, cv.MORPH_OPEN, k_h_minor)
+    vert_minor  = cv.morphologyEx(th, cv.MORPH_OPEN, k_v_minor)
+
+    grid = cv.bitwise_or(cv.bitwise_or(horiz_major, vert_major), cv.bitwise_or(horiz_minor, vert_minor))
+
+    # მცირე წმენდა
+    grid = cv.morphologyEx(grid, cv.MORPH_CLOSE, np.ones((3,3), np.uint8), iterations=1)
+    grid = cv.morphologyEx(grid, cv.MORPH_OPEN,  np.ones((2,2), np.uint8), iterations=1)
+
+    return grid
+
+
+# --- ფერადი/შავ-თეთრი სურათზე inpaint ---
 def inpaint_grid(image: np.ndarray, grid_mask: np.ndarray) -> np.ndarray:
-    """
-    Removes the grid from an image (color or grayscale) using inpainting.
-    """
     mask = (grid_mask > 0).astype(np.uint8) * 255
     return cv.inpaint(image, mask, 3, cv.INPAINT_TELEA)
 
+
+# --- QC: პერიოდის შეფასება ---
 def estimate_grid_period(mask: np.ndarray) -> Tuple[float, float]:
     if mask.ndim == 3:
         mask = cv.cvtColor(mask, cv.COLOR_BGR2GRAY)
-    mask = (mask > 0).astype(np.uint8)*255
+    mask = (mask > 0).astype(np.uint8) * 255
     proj_x = mask.mean(axis=0)
     proj_y = mask.mean(axis=1)
 
@@ -81,26 +92,26 @@ def estimate_grid_period(mask: np.ndarray) -> Tuple[float, float]:
         if np.all(sig == 0):
             return 0.0
         corr = np.correlate(sig, sig, mode='full')
-        corr = corr[corr.size//2:]
+        corr = corr[corr.size // 2:]
         try:
             from scipy.signal import find_peaks
             peaks, _ = find_peaks(corr, distance=5)
             if len(peaks) < 1:
                 return 0.0
             return float(peaks[0])
-        except (ImportError, IndexError):
+        except Exception:
             return 0.0
 
-    period_x = peak_period(proj_x)
-    period_y = peak_period(proj_y)
-    return period_x, period_y
+    return peak_period(proj_x), peak_period(proj_y)
 
+
+# --- Trace mask (ბაზა) ---
 def trace_mask_from_gray(no_grid_gray: np.ndarray) -> np.ndarray:
     th = cv.adaptiveThreshold(no_grid_gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C,
                               cv.THRESH_BINARY_INV, 35, 5)
-    kernel = np.ones((2,2), np.uint8)
-    th = cv.morphologyEx(th, cv.MORPH_OPEN, kernel, iterations=1)
+    th = cv.morphologyEx(th, cv.MORPH_OPEN, np.ones((2,2), np.uint8), iterations=1)
     return th
+
 
 def ensure_uint8(img: np.ndarray) -> np.ndarray:
     if img.dtype != np.uint8:
