@@ -1,8 +1,10 @@
+# utils.py
+
 import cv2 as cv
 import numpy as np
 from typing import Tuple
 
-# --- საბაზისო ---
+# --- საბაზისო ფუნქციები (უცვლელია) ---
 def variance_of_laplacian(gray: np.ndarray) -> float:
     return float(cv.Laplacian(gray, cv.CV_64F).var())
 
@@ -16,112 +18,74 @@ def rotate_image(image, angle_deg):
 def detect_skew_angle_via_hough(gray: np.ndarray) -> float:
     edges = cv.Canny(gray, 50, 150, apertureSize=3)
     lines = cv.HoughLines(edges, 1, np.pi/180, 200)
-    if lines is None:
-        return 0.0
-    angles = []
-    for i in range(min(len(lines), 500)):
-        rho, theta = lines[i][0]
-        angles.append(theta)
-    if not angles:
-        return 0.0
+    if lines is None: return 0.0
+    angles = [theta for rho, theta in lines[:, 0]]
+    if not angles: return 0.0
     angles = np.rad2deg(np.array(angles))
     angles = np.where(angles > 90, angles - 180, angles)
-    median = float(np.median(angles))
-    return -median
+    return -float(np.median(angles))
 
+# --- ფერის ნიღბის ფუნქცია (ძველი, მაგრამ ისევ გვჭირდება) ---
+def grid_mask_from_hsv(bgr: np.ndarray, color: str = "red") -> np.ndarray:
+    hsv = cv.cvtColor(bgr, cv.COLOR_BGR2HSV)
+    color_ranges = {
+        'red': {'lower1': (0, 70, 70), 'upper1': (10, 255, 255), 'lower2': (170, 70, 70), 'upper2': (180, 255, 255)},
+        'blue': {'lower1': (100, 150, 0), 'upper1': (140, 255, 255), 'lower2': None, 'upper2': None},
+        'green': {'lower1': (36, 50, 70), 'upper1': (89, 255, 255), 'lower2': None, 'upper2': None}
+    }
+    selected_color = color_ranges.get(color.lower(), color_ranges['red'])
+    mask1 = cv.inRange(hsv, selected_color['lower1'], selected_color['upper1'])
+    if selected_color['lower2'] is not None:
+        mask2 = cv.inRange(hsv, selected_color['lower2'], selected_color['upper2'])
+        return cv.bitwise_or(mask1, mask2)
+    return mask1
 
-# --- GRID (მორფოლოგიური სტრუქტურებზე) ---
-def grid_mask_from_gray_lines(gray: np.ndarray) -> np.ndarray:
+# --- !!! ახალი ფუნქცია ნიღბის გასაწმენდად !!! ---
+def refine_grid_mask_morphologically(mask: np.ndarray) -> np.ndarray:
     """
-    ECG-ის ბადის ამოცნობა მხოლოდ სტრუქტურაზე დაყრდნობით.
+    Takes a "dirty" mask and keeps only the long straight lines (the grid).
     """
-    gray = cv.medianBlur(gray, 3)
+    h, w = mask.shape[:2]
+    # ვერტიკალური ხაზების პოვნა
+    vertical_kernel = cv.getStructuringElement(cv.MORPH_RECT, (1, h // 30))
+    vertical_lines = cv.morphologyEx(mask, cv.MORPH_OPEN, vertical_kernel, iterations=2)
+    
+    # ჰორიზონტალური ხაზების პოვნა
+    horizontal_kernel = cv.getStructuringElement(cv.MORPH_RECT, (w // 30, 1))
+    horizontal_lines = cv.morphologyEx(mask, cv.MORPH_OPEN, horizontal_kernel, iterations=2)
+    
+    # შედეგების გაერთიანება
+    refined_mask = cv.add(vertical_lines, horizontal_lines)
+    
+    # საბოლოო გაწმენდა
+    refined_mask = cv.morphologyEx(refined_mask, cv.MORPH_CLOSE, np.ones((5,5), np.uint8))
+    return refined_mask
 
-    # Contrast enhancement (CLAHE)
-    clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    g = clahe.apply(gray)
-
-    # ხაზების გაშავება: black-hat
-    bh_h = cv.morphologyEx(g, cv.MORPH_BLACKHAT, cv.getStructuringElement(cv.MORPH_RECT, (41, 1)))
-    bh_v = cv.morphologyEx(g, cv.MORPH_BLACKHAT, cv.getStructuringElement(cv.MORPH_RECT, (1, 41)))
-    bh = cv.addWeighted(bh_h, 0.5, bh_v, 0.5, 0)
-
-    # ბინარიზაცია Otsu
-    _, th = cv.threshold(bh, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
-
-    h, w = th.shape[:2]
-
-    # მსხვილი ხაზები
-    k_h_major = cv.getStructuringElement(cv.MORPH_RECT, (max(25, w // 45), 1))
-    k_v_major = cv.getStructuringElement(cv.MORPH_RECT, (1, max(25, h // 45)))
-    horiz_major = cv.morphologyEx(th, cv.MORPH_OPEN, k_h_major)
-    vert_major  = cv.morphologyEx(th, cv.MORPH_OPEN, k_v_major)
-
-    # წვრილი ხაზები
-    k_h_minor = cv.getStructuringElement(cv.MORPH_RECT, (max(9, w // 140), 1))
-    k_v_minor = cv.getStructuringElement(cv.MORPH_RECT, (1, max(9, h // 140)))
-    horiz_minor = cv.morphologyEx(th, cv.MORPH_OPEN, k_h_minor)
-    vert_minor  = cv.morphologyEx(th, cv.MORPH_OPEN, k_v_minor)
-
-    grid = cv.bitwise_or(cv.bitwise_or(horiz_major, vert_major),
-                         cv.bitwise_or(horiz_minor, vert_minor))
-
-    # წმენდა
-    grid = cv.morphologyEx(grid, cv.MORPH_CLOSE, np.ones((3,3), np.uint8), iterations=1)
-    grid = cv.morphologyEx(grid, cv.MORPH_OPEN,  np.ones((2,2), np.uint8), iterations=1)
-
-    return grid
-
-
-# --- INPAINT ---
+# --- დანარჩენი ფუნქციები (უცვლელია) ---
 def inpaint_grid(image: np.ndarray, grid_mask: np.ndarray) -> np.ndarray:
-    """
-    Removes the grid from COLOR or GRAYSCALE image using Telea inpainting.
-    """
     mask = (grid_mask > 0).astype(np.uint8) * 255
     return cv.inpaint(image, mask, 3, cv.INPAINT_TELEA)
 
-
-# --- QC: Grid period ---
 def estimate_grid_period(mask: np.ndarray) -> Tuple[float, float]:
-    if mask.ndim == 3:
-        mask = cv.cvtColor(mask, cv.COLOR_BGR2GRAY)
-    mask = (mask > 0).astype(np.uint8) * 255
     proj_x = mask.mean(axis=0)
     proj_y = mask.mean(axis=1)
-
     def peak_period(sig):
         sig = sig - sig.mean()
-        if np.all(sig == 0):
-            return 0.0
-        corr = np.correlate(sig, sig, mode='full')
-        corr = corr[corr.size // 2:]
+        if np.all(sig == 0): return 0.0
+        corr = np.correlate(sig, sig, mode='full')[len(sig)-1:]
         try:
             from scipy.signal import find_peaks
             peaks, _ = find_peaks(corr, distance=5)
-            if len(peaks) < 1:
-                return 0.0
-            return float(peaks[0])
+            return float(peaks[0]) if len(peaks) > 0 else 0.0
         except Exception:
             return 0.0
-
     return peak_period(proj_x), peak_period(proj_y)
 
-
-# --- TRACE ---
 def trace_mask_from_gray(no_grid_gray: np.ndarray) -> np.ndarray:
-    th = cv.adaptiveThreshold(no_grid_gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-                              cv.THRESH_BINARY_INV, 35, 5)
+    th = cv.adaptiveThreshold(no_grid_gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 35, 5)
     th = cv.morphologyEx(th, cv.MORPH_OPEN, np.ones((2,2), np.uint8), iterations=1)
     return th
 
-
-# --- Helper ---
-def ensure_uint8(img: np.ndarray) -> np.ndarray:
-    if img.dtype != np.uint8:
-        img = np.clip(img, 0, 255).astype(np.uint8)
-    return img
-
 def to_png_bytes(arr: np.ndarray) -> bytes:
-    is_ok, buf = cv.imencode(".png", ensure_uint8(arr))
+    is_ok, buf = cv.imencode(".png", arr.clip(0, 255).astype(np.uint8))
     return buf.tobytes() if is_ok else b""
