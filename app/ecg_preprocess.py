@@ -7,12 +7,11 @@ from typing import Dict, Any
 import cv2 as cv
 import numpy as np
 
-# --- CHANGES HERE ---
 from .utils import (
     variance_of_laplacian,
     rotate_image,
     detect_skew_angle_via_hough,
-    grid_mask_from_hsv,  # Changed from grid_mask_from_red_hsv
+    grid_mask_from_hsv,
     inpaint_grid,
     estimate_grid_period,
     trace_mask_from_gray,
@@ -31,12 +30,7 @@ def _bytes_to_bgr(image_bytes: bytes) -> np.ndarray:
     return bgr
 
 
-# --- AND HERE ---
 def run_pipeline(image_bytes: bytes, grid_color: str = "red") -> Dict[str, Any]:
-    """
-    Stage 1 pipeline. Now accepts a grid_color parameter.
-    """
-    # --- 0) Read/validate ---
     bgr = _bytes_to_bgr(image_bytes)
     if bgr is None:
         empty_png = base64.b64encode(to_png_bytes(np.zeros((32, 32), np.uint8))).decode("utf-8")
@@ -47,22 +41,21 @@ def run_pipeline(image_bytes: bytes, grid_color: str = "red") -> Dict[str, Any]:
             "download_urls": {},
         }
 
-    # --- 1) Deskew ---
     gray0 = cv.cvtColor(bgr, cv.COLOR_BGR2GRAY)
     angle = detect_skew_angle_via_hough(gray0)
     rotated = rotate_image(bgr, angle)
 
-    # --- 2) Grid mask + removal ---
-    # --- AND HERE ---
-    # Pass the grid_color parameter to the updated function
     grid_mask = grid_mask_from_hsv(rotated, color=grid_color)
-    rotated_gray = cv.cvtColor(rotated, cv.COLOR_BGR_GRAY)
+    
+    # --- THE FIX IS ON THIS LINE ---
+    # Changed cv.COLOR_BGR_GRAY to the correct cv.COLOR_BGR2GRAY
+    rotated_gray = cv.cvtColor(rotated, cv.COLOR_BGR2GRAY)
+    # --- END OF FIX ---
+    
     no_grid = inpaint_grid(rotated_gray, grid_mask)
 
-    # --- 3) Trace mask ---
     trace_mask = trace_mask_from_gray(no_grid)
 
-    # ... rest of the function remains the same ...
     period_x, period_y = estimate_grid_period(grid_mask)
     valid_periods = [p for p in (period_x, period_y) if p and p > 0]
     px_per_mm = float(np.mean(valid_periods) if valid_periods else 20.0)
