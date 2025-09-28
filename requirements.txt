@@ -9,6 +9,3 @@ numpy==1.26.4
 pillow==10.4.0
 scikit-image==0.24.0
 scipy==1.14.0
-
-# Extra ECG image library (from GitHub)
-git+https://github.com/alphanumericslab/ecg-image-kit.git
