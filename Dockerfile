@@ -1,28 +1,23 @@
-# მსუბუქი Python base image
 FROM python:3.11-slim
 
-# Env config
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-# System dependencies (OpenCV და სხვა libs)
+# Install system dependencies (added git)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libglib2.0-0 libgl1 libsm6 libxrender1 libxext6 \
-    && rm -rf /var/lib/apt/lists/*
+    libglib2.0-0 libgl1 libsm6 libxrender1 libxext6 git \
+ && rm -rf /var/lib/apt/lists/*
 
-# სამუშაო დირექტორია
 WORKDIR /app
 
-# requirements.txt ქეშისთვის
+# Copy requirements first (for better caching)
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+# Upgrade pip and install requirements
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
 
-# app კოდი
-COPY app ./app
+# Copy application code
+COPY . .
 
-# output დირექტორია
-RUN mkdir -p /app/output
+EXPOSE 8000
 
-# uvicorn start
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start FastAPI server
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
