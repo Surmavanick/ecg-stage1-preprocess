@@ -13,31 +13,23 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-webhook-url.n8n.cloud/webho
 OUTPUT_DIR = "/app/output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
-
-# --- CHANGES HERE ---
 @app.post("/ecg-photo/preprocess")
 async def preprocess_ecg_photo(
     image: UploadFile = File(...),
-    grid_color: str = Form("red"),  # New form field for grid color
+    # The color parameter is no longer needed
     layout_hint: str = Form("string"),
     speed_hint: int = Form(0),
     gain_hint: int = Form(0)
 ):
-    """
-    Receives an ECG photo, processes it, and returns a JSON.
-    The grid color can now be specified ('red', 'blue', 'green').
-    """
     try:
         file_bytes = await image.read()
-
-        # --- AND HERE ---
-        # Pass the grid_color from the form to the pipeline
-        result = ecg_preprocess.run_pipeline(file_bytes, grid_color=grid_color)
+        
+        # The grid_color parameter is removed from the function call
+        result = ecg_preprocess.run_pipeline(file_bytes)
 
         response_data = {
             "ok": True,
@@ -51,8 +43,7 @@ async def preprocess_ecg_photo(
              async with httpx.AsyncClient() as client:
                 try:
                     print(f"📡 Sending to n8n webhook: {WEBHOOK_URL}")
-                    resp = await client.post(WEBHOOK_URL, json=response_data, timeout=30)
-                    print(f"✅ n8n response: {resp.status_code}")
+                    await client.post(WEBHOOK_URL, json=response_data, timeout=30)
                 except Exception as webhook_error:
                     print(f"⚠️ Failed to send to n8n webhook: {webhook_error}")
 
@@ -62,9 +53,11 @@ async def preprocess_ecg_photo(
         print(f"❌ Error in /ecg-photo/preprocess endpoint: {e}")
         return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
 
-
 @app.get("/download/{filename}")
 async def download_file(filename: str):
+    # This endpoint is tricky because the library creates files with fixed names.
+    # We should save the final outputs with unique names if this were a production system.
+    # For now, this will serve the last processed files.
     file_path = os.path.join(OUTPUT_DIR, filename)
     if not os.path.exists(file_path):
         return JSONResponse(content={"ok": False, "error": "File not found"}, status_code=404)
