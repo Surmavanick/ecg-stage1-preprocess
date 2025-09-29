@@ -1,8 +1,7 @@
 FROM python:3.11-slim
 
-# Install system dependencies (added git here)
+# Install system dependencies (საჭიროა opencv-სთვის)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
     libglib2.0-0 \
     libgl1 \
     libsm6 \
