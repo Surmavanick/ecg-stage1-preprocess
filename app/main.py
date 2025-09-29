@@ -1,76 +1,36 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import StreamingResponse
-import shutil
-import os
-import io
-import httpx
+from fastapi.responses import FileResponse
 import matplotlib.pyplot as plt
+import numpy as np
+import cv2
+import uuid
+import os
 
-from app.ecg_preprocess import image_to_sequence
-from app.utils import detect_qrs, normalize_signal
+app = FastAPI()
 
-app = FastAPI(title="ECG Digitizer API")
-
-
-@app.get("/")
-def root():
-    return {"message": "ECG Digitizer API running!"}
-
-
-@app.post("/process")
+@app.post("/process", response_class=FileResponse)
 async def process_ecg(file: UploadFile = File(...)):
-    """
-    Upload ECG image and return digitized signal + QRS peaks as JSON.
-    """
-    temp_path = f"/tmp/{file.filename}"
-    with open(temp_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # დროებითი ფაილის ჩაწერა
+    raw_path = f"/tmp/{uuid.uuid4()}_{file.filename}"
+    with open(raw_path, "wb") as f:
+        f.write(await file.read())
 
-    # Extract ECG trace
-    signal = image_to_sequence(temp_path, mode="dark-foreground", method="moving_average", windowlen=5)
-    signal = normalize_signal(signal)
-    peaks = detect_qrs(signal)
+    # ECG სურათის ჩატვირთვა
+    img = cv2.imread(raw_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise ValueError("Invalid image file")
 
-    os.remove(temp_path)
+    # აქ შეგიძლია ჩასვა შენი რეალური image_to_sequence
+    # ეს მაგალითი უბრალოდ ხაზს აგენერირებს
+    trace = np.mean(img, axis=0)
 
-    return {
-        "length": len(signal),
-        "peaks": peaks.tolist(),
-        "num_peaks": len(peaks)
-    }
+    # შედეგის გრაფიკი PNG-ში
+    out_path = f"/tmp/ecg_result_{uuid.uuid4()}.png"
+    plt.figure(figsize=(8,3))
+    plt.plot(trace, color="green")
+    plt.title("Extracted ECG Trace")
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
 
-
-@app.post("/plot")
-async def plot_ecg(file: UploadFile = File(...)):
-    """
-    Upload ECG image and return plotted ECG trace as PNG.
-    """
-    temp_path = f"/tmp/{file.filename}"
-    with open(temp_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    signal = image_to_sequence(temp_path, mode="dark-foreground", method="moving_average", windowlen=5)
-    signal = normalize_signal(signal)
-
-    # Plot
-    fig, ax = plt.subplots(figsize=(10, 3))
-    ax.plot(signal, color="g")
-    ax.set_title("Extracted ECG Signal")
-    ax.set_xlabel("Samples")
-    ax.set_ylabel("Normalized Amplitude")
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
-
-    os.remove(temp_path)
-
-    return StreamingResponse(buf, media_type="image/png")
-
-
-@app.get("/ping-external")
-async def ping_external():
-    async with httpx.AsyncClient() as client:
-        r = await client.get("https://httpbin.org/get")
-    return {"status": r.status_code, "data": r.json()}
+    return FileResponse(out_path, media_type="image/png", filename="ecg_result.png")
