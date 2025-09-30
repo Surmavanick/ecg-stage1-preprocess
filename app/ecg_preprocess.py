@@ -1,12 +1,9 @@
 import cv2
 import numpy as np
-from scipy.signal import find_peaks
-import matplotlib.pyplot as plt
 
-
-def image_to_sequence(img_path, mode="dark-foreground", method="moving_average", windowlen=5, plot_result=False):
+def image_to_sequence(img_path, mode="dark-foreground", method="moving_average", window=5):
     """
-    Extract ECG signal from an image (Python version).
+    Extract ECG signal from an image.
     """
     img = cv2.imread(img_path)
     if img is None:
@@ -15,7 +12,7 @@ def image_to_sequence(img_path, mode="dark-foreground", method="moving_average",
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
 
-    # If bright foreground → invert
+    # Invert if needed
     if mode == "bright-foreground":
         gray = cv2.bitwise_not(gray)
 
@@ -27,23 +24,9 @@ def image_to_sequence(img_path, mode="dark-foreground", method="moving_average",
 
     trace = np.array(trace, dtype=float)
 
-    # Normalize
-    trace = (trace - np.min(trace)) / (np.max(trace) - np.min(trace))
-
-    # Apply smoothing
+    # Moving average filter
     if method == "moving_average":
-        kernel = np.ones(windowlen) / windowlen
+        kernel = np.ones(window) / window
         trace = np.convolve(trace, kernel, mode="same")
-    elif method == "max_finder":
-        pass  # already implemented by argmin
-    # Other methods can be extended here
-
-    if plot_result:
-        plt.figure(figsize=(10, 3))
-        plt.plot(trace, color="g")
-        plt.title("Extracted ECG Signal")
-        plt.xlabel("Samples")
-        plt.ylabel("Normalized Amplitude")
-        plt.show()
 
     return trace
