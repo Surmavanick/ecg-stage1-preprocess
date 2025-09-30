@@ -1,11 +1,13 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import numpy as np
 import matplotlib.pyplot as plt
 import os
 import uuid
+import cv2
+import zipfile
 
-from app.ecg_preprocess import image_to_sequence
+from app.ecg_preprocess import image_to_sequence, remove_ecg_labels
 from app.utils import smooth_signal
 
 app = FastAPI(title="ECG Preprocess API")
@@ -14,6 +16,7 @@ UPLOAD_DIR = "uploads"
 RESULT_DIR = "results"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(RESULT_DIR, exist_ok=True)
+
 
 @app.post("/process")
 async def process_ecg(file: UploadFile = File(...)):
@@ -43,21 +46,35 @@ async def plot_ecg(file: UploadFile = File(...)):
     with open(file_path, "wb") as f:
         f.write(contents)
 
-    trace = image_to_sequence(file_path)
+    # Debug image (ტექსტის გარეშე)
+    img = cv2.imread(file_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    cleaned = remove_ecg_labels(gray)
 
-    # Invert + smooth
+    debug_name = f"debug_{uuid.uuid4().hex}.png"
+    debug_path = os.path.join(RESULT_DIR, debug_name)
+    cv2.imwrite(debug_path, cleaned)
+
+    # ECG trace
+    trace = image_to_sequence(file_path)
     trace = np.max(trace) - trace
     trace_smooth = smooth_signal(trace, "savgol")
 
-    # Plot
     plt.figure(figsize=(10, 3))
     plt.plot(trace_smooth, color="green")
     plt.title("Extracted ECG Trace")
     plt.tight_layout()
 
-    out_name = f"ecg_{uuid.uuid4().hex}.png"
-    out_path = os.path.join(RESULT_DIR, out_name)
-    plt.savefig(out_path)
+    ecg_name = f"ecg_{uuid.uuid4().hex}.png"
+    ecg_path = os.path.join(RESULT_DIR, ecg_name)
+    plt.savefig(ecg_path)
     plt.close()
 
-    return FileResponse(out_path, media_type="image/png", filename=out_name)
+    # ZIP შევქმნათ
+    zip_name = f"ecg_results_{uuid.uuid4().hex}.zip"
+    zip_path = os.path.join(RESULT_DIR, zip_name)
+    with zipfile.ZipFile(zip_path, "w") as zipf:
+        zipf.write(ecg_path, arcname=ecg_name)
+        zipf.write(debug_path, arcname=debug_name)
+
+    return FileResponse(zip_path, media_type="application/zip", filename=zip_name)
