@@ -3,20 +3,24 @@ import numpy as np
 
 def remove_ecg_labels(gray):
     """
-    Remove small text labels (I, II, III, aVR, aVL, aVF, V1–V6) from ECG image.
-    Works by contour filtering (removes small bounding boxes that look like text).
+    Remove ECG text labels (I, II, III, aVR, aVL, aVF, V1–V6) from ECG image.
+    Uses contour filtering + morphology to eliminate black letters too.
     """
-    # Binary inverse: ტექსტი ხდება თეთრი, ფონზე
+    # Binary inverse: ტექსტი გამოკვეთილი გახდეს
     _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
 
-    # ვიპოვოთ ყველა პატარა ობიექტი
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Morphology → ასოების შტრიხები ერთიანდება
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    # ვიპოვოთ ყველა ობიექტი
+    contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     mask = np.zeros_like(gray)
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
-        # ECG ხაზი ჩვეულებრივ გრძელია, ტექსტი კი პატარაა
-        if 10 < w < 60 and 10 < h < 40:
+        # ECG ხაზი გრძელია, ტექსტი შედარებით პატარაა
+        if 10 < w < 120 and 10 < h < 80:
             cv2.rectangle(mask, (x, y), (x + w, y + h), 255, -1)
 
     # ამოვშალოთ ტექსტი
