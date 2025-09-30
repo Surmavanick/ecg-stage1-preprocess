@@ -1,17 +1,10 @@
 import numpy as np
-from scipy.signal import find_peaks
+from scipy.signal import savgol_filter
 
-
-def detect_qrs(signal, prominence=0.2):
-    """
-    Detect QRS complexes in ECG signal.
-    """
-    peaks, _ = find_peaks(signal, prominence=prominence)
-    return peaks
-
-
-def normalize_signal(signal):
-    """
-    Normalize ECG to [0, 1].
-    """
-    return (signal - np.min(signal)) / (np.max(signal) - np.min(signal))
+def smooth_signal(trace, method="savgol"):
+    if method == "savgol":
+        return savgol_filter(trace, 11, 3)
+    elif method == "moving_average":
+        kernel = np.ones(5) / 5
+        return np.convolve(trace, kernel, mode="same")
+    return trace
