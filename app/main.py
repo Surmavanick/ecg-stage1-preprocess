@@ -6,6 +6,8 @@ import os
 import uuid
 import cv2
 import csv
+import json
+import zipfile
 
 # Local imports
 from .ecg_preprocess import image_to_sequence, preprocess_ecg_image
@@ -52,7 +54,7 @@ async def process_ecg(
     remove_artifacts: bool = Query(True, description="Remove text and artifacts")
 ):
     """
-    Process ECG image and return metrics + calibration + CSV export.
+    Process ECG image and return ZIP file with CSV + JSON.
     """
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     with open(file_path, "wb") as f:
@@ -73,22 +75,39 @@ async def process_ecg(
         # Trim edges
         trace_mV = trim_edges(trace_mV, trim_ratio=0.05)
 
+        # Detect peaks
+        peaks, _ = detect_peaks(trace_mV, height=np.mean(trace_mV), distance=len(trace_mV)//20)
+        peaks_list = peaks.tolist()
+
         # Save CSV
         csv_name = f"ecg_{uuid.uuid4().hex[:8]}.csv"
         csv_path = os.path.join(RESULT_DIR, csv_name)
         save_trace_to_csv(trace_mV, fs, csv_path)
 
-        # Detect peaks
-        peaks, _ = detect_peaks(trace_mV, height=np.mean(trace_mV), distance=len(trace_mV)//20)
-
-        return JSONResponse(content={
+        # Save JSON metadata
+        json_name = f"ecg_{uuid.uuid4().hex[:8]}.json"
+        json_path = os.path.join(RESULT_DIR, json_name)
+        meta = {
             "length": len(trace_mV),
-            "num_peaks": len(peaks.tolist()),
-            "peaks": peaks.tolist(),
+            "num_peaks": len(peaks_list),
+            "peaks": peaks_list,
             "px_per_mm": px_per_mm,
             "fs_hz": fs,
-            "csv_file": csv_name
-        })
+            "method_used": method,
+            "artifacts_removed": remove_artifacts
+        }
+        with open(json_path, "w") as f:
+            json.dump(meta, f, indent=2)
+
+        # Package ZIP
+        zip_name = f"ecg_process_{uuid.uuid4().hex[:8]}.zip"
+        zip_path = os.path.join(RESULT_DIR, zip_name)
+        with zipfile.ZipFile(zip_path, "w") as zipf:
+            zipf.write(csv_path, arcname=csv_name)
+            zipf.write(json_path, arcname=json_name)
+
+        return FileResponse(zip_path, media_type="application/zip", filename=zip_name)
+
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
     finally:
@@ -104,7 +123,7 @@ async def plot_ecg(
     smooth_method: str = Query("savgol", description="Smoothing method: savgol, moving_average, etc.")
 ):
     """
-    Process ECG image and return calibrated plot (PNG) + CSV file.
+    Process ECG image and return ZIP with plot (PNG), CSV, and JSON metadata.
     """
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     with open(file_path, "wb") as f:
@@ -125,12 +144,31 @@ async def plot_ecg(
         # Trim edges
         trace_mV = trim_edges(trace_mV, trim_ratio=0.05)
 
+        # Detect peaks
+        peaks, _ = detect_peaks(trace_mV, height=np.mean(trace_mV), distance=len(trace_mV)//20)
+        peaks_list = peaks.tolist()
+
         # Save CSV
         csv_name = f"ecg_{uuid.uuid4().hex[:8]}.csv"
         csv_path = os.path.join(RESULT_DIR, csv_name)
         save_trace_to_csv(trace_mV, fs, csv_path)
 
-        # Plot
+        # Save JSON metadata
+        json_name = f"ecg_{uuid.uuid4().hex[:8]}.json"
+        json_path = os.path.join(RESULT_DIR, json_name)
+        meta = {
+            "length": len(trace_mV),
+            "num_peaks": len(peaks_list),
+            "peaks": peaks_list,
+            "px_per_mm": px_per_mm,
+            "fs_hz": fs,
+            "method_used": method,
+            "artifacts_removed": remove_artifacts
+        }
+        with open(json_path, "w") as f:
+            json.dump(meta, f, indent=2)
+
+        # Save PNG (plot)
         t = np.arange(len(trace_mV)) / fs
         plt.figure(figsize=(15, 6))
         plt.plot(t, smooth_signal(trace_mV, smooth_method), color="green", label="ECG (mV)")
@@ -141,15 +179,21 @@ async def plot_ecg(
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
 
-        out_name = f"ecg_{method}_{uuid.uuid4().hex[:8]}.png"
-        out_path = os.path.join(RESULT_DIR, out_name)
-        plt.savefig(out_path, dpi=150, bbox_inches='tight')
+        png_name = f"ecg_{method}_{uuid.uuid4().hex[:8]}.png"
+        png_path = os.path.join(RESULT_DIR, png_name)
+        plt.savefig(png_path, dpi=150, bbox_inches='tight')
         plt.close()
 
-        return {
-            "plot": FileResponse(out_path, media_type="image/png", filename=out_name),
-            "csv": FileResponse(csv_path, media_type="text/csv", filename=csv_name)
-        }
+        # Package ZIP
+        zip_name = f"ecg_plot_{uuid.uuid4().hex[:8]}.zip"
+        zip_path = os.path.join(RESULT_DIR, zip_name)
+        with zipfile.ZipFile(zip_path, "w") as zipf:
+            zipf.write(csv_path, arcname=csv_name)
+            zipf.write(json_path, arcname=json_name)
+            zipf.write(png_path, arcname=png_name)
+
+        return FileResponse(zip_path, media_type="application/zip", filename=zip_name)
+
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
     finally:
