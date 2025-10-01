@@ -6,8 +6,9 @@ import os
 import uuid
 from typing import Optional
 
-from ecg_preprocess import image_to_sequence, preprocess_ecg_image
-from utils import smooth_signal
+# Direct imports from same directory (Corrected with relative imports)
+from .ecg_preprocess import image_to_sequence, preprocess_ecg_image # <--- შეიცვალა
+from .utils import smooth_signal, detect_peaks # <--- შეიცვალა
 
 app = FastAPI(title="ECG Preprocess API")
 
@@ -25,24 +26,24 @@ async def process_ecg(
     """
     Process ECG image and return basic metrics.
     """
-    contents = await file.read()
+    # Save the uploaded file temporarily
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     with open(file_path, "wb") as f:
+        contents = await file.read()
         f.write(contents)
 
     try:
         trace = image_to_sequence(file_path, method=method, remove_artifacts=remove_artifacts)
         
-        # Find peaks (valleys in inverted signal)
-        peaks = []
-        for i in range(1, len(trace) - 1):
-            if trace[i] < trace[i-1] and trace[i] < trace[i+1]:
-                peaks.append(i)
+        # --- გაუმჯობესებული პიკების დეტექცია ---
+        # გამოვიყენოთ უფრო სანდო ფუნქცია utils.py-დან მარტივი ციკლის ნაცვლად
+        peaks, _ = detect_peaks(trace, height=np.mean(trace), distance=len(trace) // 20)
+        peaks_list = peaks.tolist() # Convert numpy array to list for JSON serialization
 
         return JSONResponse(content={
             "length": len(trace),
-            "peaks": peaks,
-            "num_peaks": len(peaks),
+            "peaks": peaks_list,
+            "num_peaks": len(peaks_list),
             "method_used": method,
             "artifacts_removed": remove_artifacts,
             "trace_stats": {
@@ -54,6 +55,11 @@ async def process_ecg(
         })
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        # Clean up the uploaded file
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
 
 @app.post("/plot")
 async def plot_ecg(
@@ -65,9 +71,9 @@ async def plot_ecg(
     """
     Process ECG image and return a plot.
     """
-    contents = await file.read()
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     with open(file_path, "wb") as f:
+        contents = await file.read()
         f.write(contents)
 
     try:
@@ -104,6 +110,11 @@ async def plot_ecg(
         return FileResponse(out_path, media_type="image/png", filename=out_name)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        # Clean up the uploaded file
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
 
 @app.post("/preprocess")
 async def preprocess_ecg(
@@ -113,9 +124,9 @@ async def preprocess_ecg(
     """
     Complete ECG preprocessing with debug output.
     """
-    contents = await file.read()
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     with open(file_path, "wb") as f:
+        contents = await file.read()
         f.write(contents)
 
     try:
@@ -133,6 +144,10 @@ async def preprocess_ecg(
         return JSONResponse(content=response_data)
     except Exception as e:
         return JSONResponse(content={"error": str(e), "success": False}, status_code=500)
+    finally:
+        # Clean up the uploaded file
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
 @app.get("/")
 async def root():
